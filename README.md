@@ -4,6 +4,8 @@ Convert `Typst` math code to `MathML`or `SVG`s (via the Typst compiler) for use 
 
 Alternatively, click `Typst math replace` or press <kbd>Ctrl + M, R</kbd> to replace all instances of typst math code between `$...$` with rendered equations. Add custom functions inside [`preamble.typ`](src/typst-anki/user_files/preamble.typ)—make sure to change your text color according to your system theme!
 
+Compatible with Anki 24.11 through 26.09+, including the new editor introduced in Anki 26.08.
+
 <p align="center">
     <img src="images/image-2.png", width=30%>
     <img src="images/image-4.png", width=30%>

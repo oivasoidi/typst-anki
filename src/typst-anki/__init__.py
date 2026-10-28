@@ -83,29 +83,91 @@ def svg_to_base64_img(svg: bytes, display_math=False) -> str:
 # ----- Replace functionality, editor input and callback definition for the context menu. ----- #
 
 
-def collect_and_replace(editor: Editor):
+def current_editor_note(editor: Editor):
+    """Returns the note currently edited by `editor`, or None.
+
+    The legacy editor (up to Anki 26.07) exposes the note directly via `.note`,
+    while the new editor (Anki 26.08+) only stores the note id in `.nid`.
+    """
+
+    note = getattr(editor, "note", None)
+    if note is not None:
+        return note
+
+    nid = getattr(editor, "nid", None)
+    return mw.col.get_note(nid) if nid else None
+
+
+def current_field_index(editor: Editor) -> int | None:
+    """Returns the index of the field currently focused in `editor`.
+
+    `currentField` is reset to None when the field loses focus, in which case
+    the last focused field (`.last_field_index`) is used as a fallback.
+    """
+
+    index = editor.currentField
+    if index is None:
+        index = getattr(editor, "last_field_index", None)
+    return index
+
+
+def replace_in_current_field(editor: Editor):
     """Collects all text between dollar signs and converts it to MathML or SVG in-place."""
 
-    if editor.currentField is None or editor.note is None:
-        showInfo("Select a text field or note!")
+    note = current_editor_note(editor)
+    if note is None:
+        showInfo("Select a text field or save the note first!")
         return
 
-    fields = editor.note.col.models.current()["flds"]
-    field_names = [f["name"] for f in fields]
-    current_field = field_names[editor.currentField]
+    field_index = current_field_index(editor)
+    field_names = [f["name"] for f in note.col.models.get(note.mid)["flds"]]
+    if field_index is None or field_index >= len(field_names):
+        showInfo("Select a text field!")
+        return
+    current_field = field_names[field_index]
 
     new_note_text = re.sub(
-        "\$(.*?)\$",
+        r"\$(.*?)\$",
         lambda match: gen_typst_math(
             match.group(1),
             Export[config["render-type"].upper()],
             match.group(1).startswith(" ") and match.group(1).endswith(" "),
         ),
-        editor.note[current_field],
+        note[current_field],
     )
 
-    editor.note[current_field] = new_note_text
-    editor.setNote(editor.note)
+    note[current_field] = new_note_text
+
+    if getattr(editor, "note", None) is not None:
+        # Legacy editor: it owns the note object and persists it itself.
+        editor.setNote(editor.note)
+    else:
+        # New editor: the note was fetched from the collection and thus needs
+        # to be written back to it, then the editor reloaded from the database.
+        mw.col.update_note(note)
+        if hasattr(editor, "reload_note"):
+            editor.reload_note()
+        else:
+            editor.setNote(note)
+
+
+def collect_and_replace(editor: Editor):
+    """Entry point for the "Typst Math replace" action."""
+
+    if editor.currentField is None and getattr(editor, "last_field_index", None) is None:
+        showInfo("Select a text field or note!")
+        return
+
+    if getattr(editor, "note", None) is None and hasattr(
+        editor, "call_after_note_saved"
+    ):
+        # New editor: flush pending changes from the webview into the note
+        # before modifying it behind the editor's back.
+        editor.call_after_note_saved(
+            partial(replace_in_current_field, editor), keepFocus=True
+        )
+    else:
+        replace_in_current_field(editor)
 
 
 def typst_editor(editor: Editor, display_math=False):
@@ -143,6 +205,9 @@ def typst_editor(editor: Editor, display_math=False):
             else f"setTimeout(() => {{ document.execCommand('insertHTML', false, {json.dumps(output_text)}); }}, 50);"
         )
 
+        # Give the web view focus back after the input dialog closed so that
+        # the caret is in the current field when the HTML is inserted.
+        editor.web.setFocus()
         editor.web.eval(js_insert_html)
 
 
@@ -195,7 +260,9 @@ def typst_menu_cb(editor: Editor):
 
             menu.addAction(act)
 
-    menu.exec(menu.actions(), QCursor.pos())
+    # NOTE: QMenu.exec expects a cursor position; passing a list of actions
+    # (as Qt 5 allowed) raises a TypeError with PyQt 6.
+    menu.exec(QCursor.pos())
 
 
 # ----- Registration of GUI hooks for shortcuts and buttons. ----- #
