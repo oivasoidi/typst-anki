@@ -1,8 +1,12 @@
 # Typst Math for Anki
 
-### `"render-type"`: `"mathml"` (default) or `"svg"`
+### `"render-type"`: `"svg"` (default) or `"mathml"`
   
-- Whether this add-on should export to MathML via Typst or invoke the Typst compiler to generate an SVG image. Affects the default selection for the editor modal and the replacing functionality.
+- Whether this add-on should invoke the Typst compiler to generate an SVG image (crisp, consistent rendering everywhere) or export to MathML (selectable text, colored by the client). Affects newly inserted equations and the replacing functionality; existing equations keep their stored format.
+
+### `"adaptive-color"`: `true` (default) or `false`
+
+- Only relevant for `"render-type": "svg"` (the default). When true, baked equations follow the color scheme of whichever client displays them — dark text on light themes, light text on dark ones, on AnkiDroid, AnkiWeb and desktop Anki alike. When false, the equation keeps the color it was compiled with (the preamble's `#set text(...)`).
 
 ### `"preamble"`: `"user_files/preamble.typ"` (default)
 

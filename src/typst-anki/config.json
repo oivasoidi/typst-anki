@@ -1,4 +1,5 @@
 {
-    "render-type": "mathml",
+    "render-type": "svg",
+    "adaptive-color": true,
     "preamble": "user_files/preamble.typ"
 }

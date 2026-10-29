@@ -1,0 +1,240 @@
+<!doctype html>
+<!--
+  typst-anki: the hidden incremental Typst compiler.
+
+  Editor pages run under a strict Content-Security-Policy that forbids
+  WebAssembly, so the Typst WASM compiler cannot live there. Add-on-served
+  pages like this one carry no CSP, which is why the compiler runs here
+  instead: the addon loads this page in a hidden webview that shares the
+  editors' browser profile (same origin, same storage partition), and the
+  editor pages send compile requests to this page over a BroadcastChannel.
+  Compiles are answered by an in-process incremental Typst compiler
+  (typst.ts, wrapping the same Typst 0.15 as the Python binding) — without
+  crossing into Python — which makes the live preview effectively instant.
+
+  The page falls out of the picture gracefully: if it is missing or fails
+  to boot, the editor falls back to compiling through the Python bridge.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>typst-anki compiler</title>
+    <script>
+      // The preamble and config are pushed in by the addon (Python) via
+      // webview.eval, potentially before the module below runs. Defined
+      // here as a plain script so the update function always exists.
+      window.__typstAnki = { preamble: "", config: {} };
+      window.__typstAnkiUpdate = (preamble, config) => {
+        window.__typstAnki.preamble = preamble || "";
+        if (config) {
+          window.__typstAnki.config = config;
+        }
+      };
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "@myriaddreamin/typst-ts-web-compiler": "./vendor/compiler/typst_ts_web_compiler.mjs",
+          "@myriaddreamin/typst-ts-renderer": "./vendor/renderer/typst_ts_renderer.mjs"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <script type="module">
+      import { createTypstCompiler, createTypstRenderer, loadFonts } from "./vendor/typst.ts/dist/esm/index.mjs";
+
+      // Typst's embedded font set (typst-assets v0.15.1): everything the
+      // default text and math rendering needs, loaded from this addon's
+      // own web exports — fully offline.
+      const FONT_FILES = [
+        "DejaVuSansMono-Bold.ttf", "DejaVuSansMono-BoldOblique.ttf",
+        "DejaVuSansMono-Oblique.ttf", "DejaVuSansMono.ttf",
+        "LibertinusSerif-Bold.otf", "LibertinusSerif-BoldItalic.otf",
+        "LibertinusSerif-Italic.otf", "LibertinusSerif-Regular.otf",
+        "LibertinusSerif-Semibold.otf", "LibertinusSerif-SemiboldItalic.otf",
+        "NewCM10-Bold.otf", "NewCM10-BoldItalic.otf",
+        "NewCM10-Italic.otf", "NewCM10-Regular.otf",
+        "NewCMMath-Bold.otf", "NewCMMath-Book.otf", "NewCMMath-Regular.otf",
+      ];
+      const CHANNEL = "typst-anki-compiler";
+
+      const state = { compiler: null, renderer: null, ready: false, error: null };
+      window.__typstAnkiCompilerState = state;
+
+      const channel = new BroadcastChannel(CHANNEL);
+      channel.onmessage = (event) => onMessage(event.data).catch((err) => console.error("typst-anki compiler:", err));
+
+      function post(message) {
+        channel.postMessage(message);
+      }
+
+      async function boot() {
+        const fonts = FONT_FILES.map((f) => "./vendor/fonts/" + f);
+        const compiler = createTypstCompiler();
+        await compiler.init({
+          getModule: () => "./vendor/compiler/typst_ts_web_compiler_bg.wasm",
+          beforeBuild: [loadFonts(fonts, { assets: false })],
+        });
+        const renderer = createTypstRenderer();
+        await renderer.init({
+          getModule: () => "./vendor/renderer/typst_ts_renderer_bg.wasm",
+        });
+        state.compiler = compiler;
+        state.renderer = renderer;
+        state.ready = true;
+        post({ type: "ready" });
+      }
+
+      // Mirrors the addon's Python `gen_typst_math` exactly, so the
+      // preview matches what gets baked.
+      function equationFor(source, block, render) {
+        const stripped = source.trim();
+        if (block) return `$ ${stripped} $`;
+        if (render === "mathml") return `$${source}$`;
+        return `#math.equation(math.inline($${source}$), block: true)`;
+      }
+
+      async function compileSvg(source, block) {
+        state.compiler.addSource("/main.typ", state.preamble + "\n" + equationFor(source, block, "svg"));
+        const res = await state.compiler.compile({ mainFilePath: "/main.typ" });
+        // The artifact (the compiler's vector format) sits under
+        // `result`; it is undefined when the source does not compile.
+        const artifact = res && res.result;
+        if (!artifact || !artifact.byteLength) {
+          throw await typstError();
+        }
+        // The renderer turns the vector artifact into a plain SVG
+        // document (glyphs and their defs, without the interactive
+        // selection styles).
+        const svg = await state.renderer.renderSvg({
+          artifactContent: artifact,
+          data_selection: { body: true, defs: true },
+        });
+        const text = String(svg);
+        if (!/<svg[\s>]/.test(text)) {
+          throw new Error("Typst compile failed");
+        }
+        return bakeSvgImg(text, block, adaptiveColor());
+      }
+
+      // Collects the compiler's diagnostics for the current document, to
+      // report *why* a compile failed (like the Python bridge does).
+      async function typstError() {
+        let message = "Typst compile failed";
+        try {
+          await state.compiler.runWithWorld({ mainFilePath: "/main.typ" }, async (world) => {
+            const r = await world.compile({ diagnostics: "full" });
+            const errors = ((r && r.diagnostics) || []).filter((d) => d.severity === "error");
+            if (errors.length) {
+              message = errors.map((d) => d.message).join("; ");
+            }
+          });
+        } catch (err) {
+          // fall back to the generic message
+        }
+        throw new Error(message);
+      }
+
+      const preamble = () => window.__typstAnki.preamble || "";
+      const adaptiveColor = () => window.__typstAnki.config["adaptive-color"] !== false;
+
+      // The JS twin of the addon's `svg_to_base64_img`: same width/height
+      // attributes and theme-adaptive stylesheet, so the preview matches
+      // the baked render exactly.
+      // UTF-8-safe, stack-safe base64 (the SVG can be large).
+      function base64(text) {
+        const bytes = new TextEncoder().encode(text);
+        let binary = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+      }
+
+      function bakeSvgImg(svgText, block, adaptive) {
+        // typst.ts renders every glyph twice: as a vector glyph, and as an
+        // HTML text layer (<foreignObject><div class="tsel">) meant for
+        // interactive in-page text selection. Inside a baked <img> that
+        // layer is harmful: the browser draws it with the fallback font,
+        // black, overlaid on the real glyph — every symbol appears twice.
+        // (The Python binding's SVG export has no such layer.) Strip it.
+        svgText = svgText.replace(/<foreignObject[\s\S]*?<\/foreignObject>/g, "");
+        // The typst.ts SVG root carries the page size in pt as unitless
+        // width/height (e.g. width="61.000"). The img attributes get the
+        // same px size the Python-side baking produces (pt * 4/3), so the
+        // live preview and the committed render are the same size.
+        let dims = "";
+        const root = svgText.slice(0, svgText.indexOf(">"));
+        const m = root.match(/width="([\d.]+)" height="([\d.]+)"/);
+        if (m) {
+          const w = Math.round(parseFloat(m[1]) * (4 / 3) * 1000) / 1000;
+          const h = Math.round(parseFloat(m[2]) * (4 / 3) * 1000) / 1000;
+          dims = ` width="${w}" height="${h}"`;
+        }
+        if (adaptive) {
+          const head = svgText.indexOf(">");
+          const style =
+            "<style>" +
+            "*:not([fill=none]) { fill: #1e1e1e; }" +
+            "*[stroke]:not([stroke=none]) { stroke: #1e1e1e; }" +
+            "@media (prefers-color-scheme: dark) {" +
+            "*:not([fill=none]) { fill: #f2f2f2; }" +
+            "*[stroke]:not([stroke=none]) { stroke: #f2f2f2; }" +
+            "}" +
+            "</style>";
+          svgText = svgText.slice(0, head + 1) + style + svgText.slice(head + 1);
+        }
+        const src = `data:image/svg+xml;base64,${base64(svgText)}`;
+        return block
+          ? `<img style="display: block; margin-left: auto; margin-right: auto;"${dims} src="${src}">`
+          : `<img style="vertical-align: middle;"${dims} src="${src}">`;
+      }
+
+      async function onMessage(msg) {
+        if (!msg || typeof msg !== "object") {
+          return;
+        }
+        if (msg.type === "ping") {
+          post({ type: state.ready ? "ready" : "booting" });
+          return;
+        }
+        if (msg.type !== "compile") {
+          return;
+        }
+        if (!state.ready) {
+          // The editor retries through the Python bridge.
+          post({ type: "result", id: msg.id, fallback: true });
+          return;
+        }
+        if (msg.render === "mathml") {
+          // The WASM compiler does not expose Typst's HTML export, so
+          // MathML renders are compiled by the Python bridge.
+          post({ type: "result", id: msg.id, fallback: true });
+          return;
+        }
+        try {
+          const html = await compileSvg(msg.source, msg.block);
+          post({ type: "result", id: msg.id, ok: true, html });
+        } catch (err) {
+          post({
+            type: "result",
+            id: msg.id,
+            ok: false,
+            error: String((err && err.message) || err),
+          });
+        }
+      }
+
+      // The preamble must be current before the first compile comes in.
+      Object.defineProperty(state, "preamble", { get: preamble });
+
+      boot().catch((err) => {
+        state.error = String(err);
+        console.error("typst-anki compiler failed to boot:", err);
+        post({ type: "error", error: state.error });
+      });
+    </script>
+  </body>
+</html>
