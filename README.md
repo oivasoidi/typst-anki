@@ -20,7 +20,6 @@ zip -r typst-anki.zip ./*
 ```
 
 Then, open Anki > Tools > Addons > Install from file > `typst_anki.zip`.
-Or, if you wish, use [`just`](https://github.com/casey/just).
 
 ## Features
 
