@@ -437,6 +437,53 @@ check("element defined", !!window.customElements.get("anki-typst"));
         !document.querySelector(".typst-anki-panel") && blkC.dataset.typst === "sum");
     check("exit left inserts no br", blkC.previousSibling === brJ && brJ.previousSibling === jtxt);
     delete host.shadowRoot.getSelection;
+
+    // 10d. Backspace in an empty equation deletes it (like the native
+    //      equation editor) — both after emptying it and on a freshly
+    //      inserted, never-typed equation.
+    let inputEvents = 0;
+    editable.addEventListener("input", () => inputEvents++);
+    const del = document.createElement("anki-typst");
+    del.setAttribute("data-typst", "temp");
+    del.setAttribute("data-render-src", "temp");
+    del.innerHTML = "<img data-src='temp'>";
+    editable.appendChild(del);
+    await sleep(10);
+    del.click();
+    await sleep(20);
+    const boxD = document.querySelector(".typst-anki-panel .src");
+    check("delete test equation editable", boxD !== null && boxD.value === "temp");
+    boxD.value = "";
+    boxD.dispatchEvent(new window.Event("input"));
+    boxD.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    await sleep(20);
+    check("backspace in emptied equation deletes it",
+        !del.isConnected && inputEvents === 1 && !document.querySelector(".typst-anki-panel"));
+    const del2 = document.createElement("anki-typst");
+    del2.setAttribute("data-typst", "");
+    editable.appendChild(del2);
+    await sleep(10);
+    del2.click();
+    await sleep(20);
+    const boxD2 = document.querySelector(".typst-anki-panel .src");
+    check("fresh empty equation editable", boxD2 !== null && boxD2.value === "");
+    boxD2.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    await sleep(20);
+    check("backspace in fresh empty equation deletes it", !del2.isConnected);
+    // Backspace in a non-empty equation is normal text editing, not deletion.
+    const del3 = document.createElement("anki-typst");
+    del3.setAttribute("data-typst", "xy");
+    del3.setAttribute("data-render-src", "xy");
+    del3.innerHTML = "<img data-src='xy'>";
+    editable.appendChild(del3);
+    await sleep(10);
+    del3.click();
+    await sleep(20);
+    const boxD3 = document.querySelector(".typst-anki-panel .src");
+    boxD3.setSelectionRange(2, 2);
+    boxD3.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+    await sleep(20);
+    check("backspace in non-empty equation does not delete it", del3.isConnected);
     // The empty placeholder of a block equation is centered as well.
     const blkEmpty = document.createElement("anki-typst");
     blkEmpty.setAttribute("data-typst", "");

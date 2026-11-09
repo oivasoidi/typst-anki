@@ -926,6 +926,16 @@
       } else if (e.key === "Escape") {
         e.preventDefault();
         this.__finish(false, false);
+      } else if (e.key === "Backspace" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Backspace in an empty equation deletes it, like the native
+        // equation editor. `__dirty` is forced so a freshly inserted,
+        // never-typed equation is removed as well — the empty-commit path
+        // in __finish only deletes deliberately emptied equations.
+        if (!this.__sourceText().trim()) {
+          e.preventDefault();
+          this.__dirty = true;
+          this.__finish(true, false);
+        }
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         // Like the native equation editor, moving the caret past the
         // start/end of the source commits and leaves the equation, with
@@ -1211,8 +1221,11 @@
           if (this.__dirty) {
             this.__editing = false;
             this.__releaseMirror();
-            this.remove();
+            // Notify before removing: an input event dispatched on a
+            // detached node does not bubble, so the editor would never
+            // learn that the field content changed.
             this.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+            this.remove();
             return;
           }
         } else {
