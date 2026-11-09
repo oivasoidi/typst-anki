@@ -845,6 +845,134 @@ check("element defined", !!window.customElements.get("anki-typst"));
     check("left from after j moves to before j in one press", !(await press("ArrowLeft")) && cur === 0);
     delete host.shadowRoot.getSelection;
 
+    // 18. Parenthesis matching in the source editor: typing "(" inserts the
+    //     closing ")" right behind the caret (wrapping a selection), typing
+    //     ")" before an existing ")" steps over it, and Backspace/Delete on
+    //     a "()" pair removes both characters.
+    const par = document.createElement("anki-typst");
+    par.setAttribute("data-typst", "f(x)");
+    par.setAttribute("data-render-src", "f(x)");
+    par.innerHTML = "<img data-src='f(x)'>";
+    editable.appendChild(par);
+    await sleep(10);
+    par.click();
+    await sleep(20);
+    const boxP = document.querySelector(".typst-anki-panel .src");
+    check("paren test equation editable", boxP !== null && boxP.value === "f(x)");
+    const beforeInput = (inputType, data) => {
+        const ev = new window.InputEvent("beforeinput", {
+            bubbles: true, cancelable: true, inputType, data,
+        });
+        boxP.dispatchEvent(ev);
+        return ev;
+    };
+    // Type "(" at the end: "f(x)(" becomes "f(x)(|)".
+    boxP.setSelectionRange(4, 4);
+    const localBeforePar = localRequests.length;
+    const evOpen = beforeInput("insertText", "(");
+    check("open paren edit is intercepted", evOpen.defaultPrevented);
+    check("closing paren auto-inserted behind the caret",
+        boxP.value === "f(x)()" && boxP.selectionStart === 5 && boxP.selectionEnd === 5);
+    await sleep(30);
+    check("auto-closed source compiles live",
+        localRequests.length === localBeforePar + 1 &&
+        localRequests[localRequests.length - 1].source === "f(x)()");
+    // Plain text insertion is not intercepted.
+    check("plain text not intercepted", !beforeInput("insertText", "x").defaultPrevented);
+    // Type ")" right before the auto-closed one: steps over it, no doubling.
+    boxP.value = "f(x)(x)";
+    boxP.setSelectionRange(6, 6);
+    boxP.dispatchEvent(new window.Event("input"));
+    const evClose = beforeInput("insertText", ")");
+    check("closing paren edit is intercepted", evClose.defaultPrevented);
+    check("typed ) steps over the auto-closed )",
+        boxP.value === "f(x)(x)" && boxP.selectionStart === 7 && boxP.selectionEnd === 7);
+    // Backspace between "(" and ")" removes the whole pair.
+    boxP.value = "f(x)()";
+    boxP.setSelectionRange(5, 5);
+    boxP.dispatchEvent(new window.Event("input"));
+    const evBs = beforeInput("deleteContentBackward", null);
+    check("backspace on a () pair is intercepted", evBs.defaultPrevented);
+    check("backspace removes both parens",
+        boxP.value === "f(x)" && boxP.selectionStart === 4 && boxP.selectionEnd === 4);
+    // Delete right before a "()" pair removes the whole pair as well.
+    boxP.value = "a()";
+    boxP.setSelectionRange(1, 1);
+    boxP.dispatchEvent(new window.Event("input"));
+    const evDel = beforeInput("deleteContentForward", null);
+    check("delete before a () pair is intercepted", evDel.defaultPrevented);
+    check("delete removes both parens", boxP.value === "a" && boxP.selectionStart === 1);
+    // Backspace not on a pair is left to the browser.
+    boxP.value = "ab";
+    boxP.setSelectionRange(2, 2);
+    check("plain backspace not intercepted", !beforeInput("deleteContentBackward", null).defaultPrevented);
+    // Typing "(" over a selection wraps it.
+    boxP.value = "f(x)";
+    boxP.setSelectionRange(2, 3);
+    const evWrap = beforeInput("insertText", "(");
+    check("open paren wraps the selection",
+        evWrap.defaultPrevented && boxP.value === "f((x))" && boxP.selectionStart === 4);
+    // Square and curly brackets behave the same.
+    boxP.value = "";
+    boxP.setSelectionRange(0, 0);
+    check("open [ is intercepted", beforeInput("insertText", "[").defaultPrevented);
+    check("closing ] auto-inserted behind the caret",
+        boxP.value === "[]" && boxP.selectionStart === 1 && boxP.selectionEnd === 1);
+    boxP.value = "";
+    boxP.setSelectionRange(0, 0);
+    check("open { is intercepted", beforeInput("insertText", "{").defaultPrevented);
+    check("closing } auto-inserted behind the caret",
+        boxP.value === "{}" && boxP.selectionStart === 1 && boxP.selectionEnd === 1);
+    // Typing the closing bracket before its partner steps over it.
+    boxP.value = "a[]";
+    boxP.setSelectionRange(2, 2);
+    check("typed ] steps over the auto-closed ]",
+        beforeInput("insertText", "]").defaultPrevented && boxP.selectionStart === 3 && boxP.value === "a[]");
+    // Backspace/Delete remove matched [ ] and { } pairs as well.
+    boxP.value = "a[]";
+    boxP.setSelectionRange(2, 2);
+    check("backspace on a [] pair removes both",
+        beforeInput("deleteContentBackward", null).defaultPrevented && boxP.value === "a" && boxP.selectionStart === 1);
+    boxP.value = "a{}";
+    boxP.setSelectionRange(1, 1);
+    check("delete before a {} pair removes both",
+        beforeInput("deleteContentForward", null).defaultPrevented && boxP.value === "a" && boxP.selectionStart === 1);
+    // Mismatched pairs are not intercepted.
+    boxP.value = "a[)";
+    boxP.setSelectionRange(2, 2);
+    check("backspace on a mismatched [) pair not intercepted",
+        !beforeInput("deleteContentBackward", null).defaultPrevented);
+    // Delete at the very end of the source is not intercepted either.
+    boxP.value = "ab";
+    boxP.setSelectionRange(2, 2);
+    check("plain delete at end not intercepted",
+        !beforeInput("deleteContentForward", null).defaultPrevented);
+    // Double quotes match as well (a quote is its own closer).
+    boxP.value = "";
+    boxP.setSelectionRange(0, 0);
+    check("open \" is intercepted", beforeInput("insertText", '"').defaultPrevented);
+    check("closing \" auto-inserted behind the caret",
+        boxP.value === '""' && boxP.selectionStart === 1 && boxP.selectionEnd === 1);
+    // Typing " directly before the auto-closed one steps over it (the
+    // type-over branch wins over auto-close for the self-closing quote).
+    check("typed \" steps over the auto-closed \"",
+        beforeInput("insertText", '"').defaultPrevented && boxP.value === '""' && boxP.selectionStart === 2);
+    // Backspace on a "" pair removes both characters.
+    boxP.setSelectionRange(1, 1);
+    check("backspace on a \"\" pair removes both",
+        beforeInput("deleteContentBackward", null).defaultPrevented && boxP.value === "" && boxP.selectionStart === 0);
+    // Typing " over a selection wraps it in quotes.
+    boxP.value = "ab";
+    boxP.setSelectionRange(1, 2);
+    check("open \" wraps the selection",
+        beforeInput("insertText", '"').defaultPrevented && boxP.value === 'a"b"' && boxP.selectionStart === 3);
+    document.body.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(20);
+    const parNow = Array.from(editable.querySelectorAll("anki-typst")).find(
+        (e) => e.dataset.typst === 'a"b"'
+    );
+    check("bracket-edited source committed", !!parNow && !document.querySelector(".typst-anki-panel"));
+
     console.log(failures === 0 ? "ALL ELEMENT TESTS PASSED" : failures + " FAILURES");
     process.exit(failures === 0 ? 0 : 1);
 })();

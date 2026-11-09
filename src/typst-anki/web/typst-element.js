@@ -882,6 +882,7 @@
       this.__errorSource = null;
       this.__unbind = [
         bind(this.__srcBox, "input", () => this.__onInput()),
+        bind(this.__srcBox, "beforeinput", (e) => this.__onBeforeInput(e)),
         bind(this.__srcBox, "keydown", (e) => this.__onKeyDown(e)),
         bind(this.__srcBox, "keyup", () => this.__onKeyUp()),
         bind(this.__srcBox, "blur", () => this.__finish(true, false)),
@@ -951,6 +952,60 @@
         return false;
       }
       return !(this.__panel && this.__panel.contains(active));
+    }
+
+    // ----- bracket/quote matching in the source editor ----- //
+    //
+    // Intercepted on beforeinput (cancelable, fires before the edit lands):
+    // typing an opening bracket (or a double quote, which closes itself)
+    // inserts its closing partner right behind the caret ("(|)", "[|]",
+    // '{|}', '"|"', wrapping the selection if there is one); typing the
+    // closing character directly before an existing one just steps over it
+    // instead of doubling it; and Backspace/Delete on a matched pair removes
+    // both characters.
+    __onBeforeInput(e) {
+      const box = this.__srcBox;
+      const value = box.value;
+      const start = box.selectionStart;
+      const end = box.selectionEnd;
+      const closing = { "(": ")", "[": "]", "{": "}", '"': '"' };
+      const isCloser = Object.values(closing).includes(e.data);
+      const open = e.data && Object.prototype.hasOwnProperty.call(closing, e.data) ? e.data : null;
+      if (e.inputType === "insertText" && isCloser && start === end && value[start] === e.data) {
+        // Type over an existing closing character instead of doubling it.
+        // Checked first: a quote is its own closer, so typing " directly
+        // before an existing " steps over it instead of opening a new pair.
+        e.preventDefault();
+        box.setSelectionRange(start + 1, start + 1);
+      } else if (e.inputType === "insertText" && open !== null) {
+        e.preventDefault();
+        const selected = value.slice(start, end);
+        box.value = value.slice(0, start) + open + selected + closing[open] + value.slice(end);
+        const caret = start + 1 + selected.length;
+        box.setSelectionRange(caret, caret);
+        this.__onInput(); // the prevented edit fires no input event
+      } else if (
+        e.inputType === "deleteContentBackward" &&
+        start === end &&
+        start > 0 &&
+        start < value.length &&
+        closing[value[start - 1]] === value[start]
+      ) {
+        e.preventDefault();
+        box.value = value.slice(0, start - 1) + value.slice(start + 1);
+        box.setSelectionRange(start - 1, start - 1);
+        this.__onInput();
+      } else if (
+        e.inputType === "deleteContentForward" &&
+        start === end &&
+        start + 1 < value.length &&
+        closing[value[start]] === value[start + 1]
+      ) {
+        e.preventDefault();
+        box.value = value.slice(0, start) + value.slice(start + 2);
+        box.setSelectionRange(start, start);
+        this.__onInput();
+      }
     }
 
     __onKeyDown(e) {
