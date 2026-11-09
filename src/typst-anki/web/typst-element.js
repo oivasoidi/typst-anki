@@ -237,7 +237,7 @@
     if (node.nodeType !== Node.ELEMENT_NODE) {
       return false;
     }
-    if (node.hasAttribute("block")) {
+    if (node.getAttribute("block") === "true") {
       return false;
     }
     switch (node.tagName) {
@@ -328,6 +328,64 @@
     return side === "before" ? offset === index : offset === index + 1;
   }
 
+  // The caret's position as an index into `el.parentElement.childNodes`, when
+  // the caret is in that parent or at the edge of one of its text children;
+  // null when the caret is elsewhere (nested deeper, or inside a text node).
+  function caretChildIndex(el) {
+    const sel = getSelectionIn(el);
+    if (!sel || !sel.isCollapsed || sel.rangeCount === 0 || !sel.focusNode) {
+      return null;
+    }
+    const parent = el.parentElement;
+    if (!parent) {
+      return null;
+    }
+    const node = sel.focusNode;
+    if (node === parent) {
+      return sel.focusOffset;
+    }
+    if (node.nodeType === Node.TEXT_NODE && node.parentNode === parent) {
+      const index = Array.prototype.indexOf.call(parent.childNodes, node);
+      if (sel.focusOffset === 0) {
+        return index;
+      }
+      if (sel.focusOffset === node.data.length) {
+        return index + 1;
+      }
+    }
+    return null;
+  }
+
+  // True when the caret sits before/after `el` with only <br>s in between —
+  // e.g. "j<br><anki-typst block>". The browser's default arrow handling
+  // skips over the atomic (contenteditable=false) block in that case, so the
+  // caret would jump from behind the "j" straight past the equation.
+  function caretNearSkippingBrs(el, side) {
+    // Only block equations need this: the browser skips over atomic
+    // block-level elements, but stops fine at inline elements' edges.
+    if (el.getAttribute("block") !== "true") {
+      return false;
+    }
+    const pos = caretChildIndex(el);
+    if (pos === null) {
+      return false;
+    }
+    const parent = el.parentElement;
+    const idx = Array.prototype.indexOf.call(parent.childNodes, el);
+    const lo = side === "before" ? pos : idx + 1;
+    const hi = side === "before" ? idx : pos;
+    if (lo >= hi) {
+      return false;
+    }
+    for (let i = lo; i < hi; i++) {
+      const n = parent.childNodes[i];
+      if (!(n.nodeType === Node.ELEMENT_NODE && n.tagName === "BR")) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // Moving the caret into an equation with the arrow keys opens its source
   // editor, like native MathJax equations do.
   document.addEventListener(
@@ -343,13 +401,19 @@
         if (el.__editing) {
           continue;
         }
-        if (event.key === "ArrowRight" && caretAdjacent(el, "before")) {
+        if (
+          event.key === "ArrowRight" &&
+          (caretAdjacent(el, "before") || caretNearSkippingBrs(el, "before"))
+        ) {
           event.preventDefault();
           event.stopPropagation();
           el.enterEdit("start");
           return;
         }
-        if (event.key === "ArrowLeft" && caretAdjacent(el, "after")) {
+        if (
+          event.key === "ArrowLeft" &&
+          (caretAdjacent(el, "after") || caretNearSkippingBrs(el, "after"))
+        ) {
           event.preventDefault();
           event.stopPropagation();
           el.enterEdit("end");
@@ -373,6 +437,16 @@
   function placeCaretBefore(el) {
     placeCaret(el, (range) => {
       range.setStartBefore(el);
+      range.collapse(true);
+    });
+  }
+
+  // Move the caret *inside* a text node at `offset`. Unlike a position at
+  // the node's boundary, the next arrow key press then visibly moves the
+  // caret within the text instead of first stepping to the boundary.
+  function placeCaretInText(textNode, offset) {
+    placeCaret(textNode, (range) => {
+      range.setStart(textNode, offset);
       range.collapse(true);
     });
   }
@@ -919,17 +993,30 @@
     // block-level (e.g. another block equation) already provides a line,
     // though: place the caret at the boundary directly, without inserting a
     // <br> that would add a spurious blank line between the two blocks.
+    // <br>s between the equation and the neighbouring content are skipped,
+    // and text neighbours get the caret *inside* them, so the next arrow
+    // key press visibly moves the caret instead of first stepping to a
+    // boundary position that looks unchanged.
     __placeCaretBesideBlock(side) {
-      const neighbor = side === "before" ? this.previousSibling : this.nextSibling;
-      if (neighbor && canHostCaret(neighbor)) {
+      let target = side === "before" ? this.previousSibling : this.nextSibling;
+      let edgeBr = null;
+      while (target && target.nodeType === Node.ELEMENT_NODE && target.tagName === "BR") {
+        edgeBr = target;
+        target = side === "before" ? target.previousSibling : target.nextSibling;
+      }
+      if (target && target.nodeType === Node.TEXT_NODE && target.data.length) {
+        placeCaretInText(target, side === "before" ? target.data.length : 0);
+        return;
+      }
+      if (target && canHostCaret(target)) {
         if (side === "before") {
-          placeCaretAfter(neighbor);
+          placeCaretAfter(target);
         } else {
-          placeCaretBefore(neighbor);
+          placeCaretBefore(target);
         }
         return;
       }
-      if (neighbor) {
+      if (target) {
         // Block-level neighbour: the caret at the boundary renders on its
         // line, so no <br> is needed.
         if (side === "before") {
@@ -939,7 +1026,17 @@
         }
         return;
       }
-      // Field start/end: a <br> gives the caret a line of its own.
+      if (edgeBr) {
+        // Only <br>s between the equation and the field edge: the caret
+        // goes next to the existing <br>.
+        if (side === "before") {
+          placeCaretAfter(edgeBr);
+        } else {
+          placeCaretBefore(edgeBr);
+        }
+        return;
+      }
+      // Field start/end: a fresh <br> gives the caret a line of its own.
       const br = document.createElement("br");
       const inserted =
         side === "before"

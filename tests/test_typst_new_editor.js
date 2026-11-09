@@ -59,7 +59,8 @@ const click = (target) => target.dispatchEvent(new window.MouseEvent("click", { 
 (async () => {
     // 1. Shortcut registration (the webview chords).
     const combos = registeredShortcuts.map(([, c]) => c);
-    check("chords registered", combos.length === 2 && combos[0] === "Control+M, T", combos);
+    check("chords registered", combos.length === 3 && combos[0] === "Control+M, T" &&
+        combos[1] === "Control+M, B" && combos[2] === "Control+M, R", combos);
     const pycmdBefore = pycmdCalls.length;
     registeredShortcuts[0][0]({ preventDefault: () => {} });
     check("chord dispatches through the bridge", pycmdCalls.length === pycmdBefore + 1 &&
@@ -82,14 +83,13 @@ const click = (target) => target.dispatchEvent(new window.MouseEvent("click", { 
     document.body.appendChild(popover);
     await sleep(10);
     const typstEntries = [...popover.querySelectorAll("button[data-typst-menu]")];
-    check("equations menu gained typst entries", typstEntries.length === 3, typstEntries.length);
-    if (typstEntries.length === 3) {
+    check("equations menu gained typst entries", typstEntries.length === 4, typstEntries.length);
+    if (typstEntries.length === 4) {
         const labels = typstEntries.map((b) => b.querySelector("span:not(.shortcut)").textContent);
         check("entry labels", labels.join("|") ===
-            "Typst Math|Typst Math block|Edit preamble...", labels.join("|"));
-        check("no replace entry left", !labels.some((l) => l.includes("replace")));
+            "Typst Math|Typst Math block|Typst Math replace|Edit preamble...", labels.join("|"));
         check("shortcut hints localized", typstEntries[0].querySelector(".shortcut").textContent === "⌘T");
-        check("preamble entry has no shortcut hint", typstEntries[2].querySelector(".shortcut") === null);
+        check("preamble entry has no shortcut hint", typstEntries[3].querySelector(".shortcut") === null);
 
         const mousedown = (target) =>
             target.dispatchEvent(
@@ -111,6 +111,9 @@ const click = (target) => target.dispatchEvent(new window.MouseEvent("click", { 
                 return event.defaultPrevented;
             })());
         click(typstEntries[2]);
+        check("replace entry dispatches",
+            pycmdCalls[pycmdCalls.length - 1] === "typst-anki:shortcut:replace");
+        click(typstEntries[3]);
         check("preamble entry dispatches",
             pycmdCalls[pycmdCalls.length - 1] === "typst-anki:shortcut:preamble");
     }
@@ -119,7 +122,7 @@ const click = (target) => target.dispatchEvent(new window.MouseEvent("click", { 
     document.body.appendChild(popover); // re-append fires the observer again
     await sleep(10);
     const allTypstEntries = document.querySelectorAll("button[data-typst-menu]");
-    check("popover not augmented twice", allTypstEntries.length === 3, allTypstEntries.length);
+    check("popover not augmented twice", allTypstEntries.length === 4, allTypstEntries.length);
 
     console.log(failures === 0 ? "ALL NEW-EDITOR TESTS PASSED" : failures + " FAILURES");
     process.exit(failures === 0 ? 0 : 1);

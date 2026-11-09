@@ -396,6 +396,47 @@ check("element defined", !!window.customElements.get("anki-typst"));
         blkB.previousSibling === blkA && blkA.nextSibling === blkB);
     check("ArrowLeft at start exits and commits",
         !document.querySelector(".typst-anki-panel") && blkB.dataset.typst === "b^2-2");
+
+    // 10c. "j<br><block>": ArrowRight behind the j must not skip over the
+    //      atomic block (the browser default jumped straight past it) —
+    //      it enters the equation instead. Exiting left must place the
+    //      caret *inside* the preceding text node, so the next ArrowLeft
+    //      visibly moves to before the j instead of a no-op boundary step.
+    const jtxt = document.createTextNode("j");
+    const brJ = document.createElement("br");
+    const blkC = document.createElement("anki-typst");
+    blkC.setAttribute("data-typst", "sum");
+    blkC.setAttribute("data-render-src", "sum");
+    blkC.setAttribute("block", "true");
+    blkC.innerHTML = "<img data-src='sum'>";
+    editable.appendChild(jtxt);
+    editable.appendChild(brJ);
+    editable.appendChild(blkC);
+    await sleep(10);
+    const selStub = {
+        isCollapsed: true, rangeCount: 1,
+        focusNode: jtxt, focusOffset: 1,
+        removeAllRanges() { this.rangeCount = 0; },
+        addRange(r) { this.rangeCount = 1; this.focusNode = r.startContainer; this.focusOffset = r.startOffset; },
+    };
+    host.shadowRoot.getSelection = () => selStub;
+    // (window.require already provides anki/RichTextInput with the mirror's
+    // preventResubscription, so editing holds the mirror and the field is
+    // not re-cloned mid-edit.)
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    await sleep(20);
+    check("ArrowRight behind j<br> enters the block equation",
+        !!document.querySelector(".typst-anki-panel"));
+    const boxC2 = document.querySelector(".typst-anki-panel .src");
+    boxC2.setSelectionRange(0, 0);
+    boxC2.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await sleep(20);
+    check("exit left places caret inside the preceding text (after j)",
+        selStub.focusNode === jtxt && selStub.focusOffset === 1);
+    check("exit left commits and closes",
+        !document.querySelector(".typst-anki-panel") && blkC.dataset.typst === "sum");
+    check("exit left inserts no br", blkC.previousSibling === brJ && brJ.previousSibling === jtxt);
+    delete host.shadowRoot.getSelection;
     // The empty placeholder of a block equation is centered as well.
     const blkEmpty = document.createElement("anki-typst");
     blkEmpty.setAttribute("data-typst", "");
@@ -600,6 +641,92 @@ check("element defined", !!window.customElements.get("anki-typst"));
     check("mathml compile goes through the bridge",
         compileCalls.length === bridgeAfterSvg + 1 &&
         compileCalls[compileCalls.length - 1].render === "mathml");
+
+    // 17. Arrow-key traversal through a whole field: "j<br><block><br><inline>k".
+    //     jsdom does not move the caret itself, so the browser's default move
+    //     is simulated: when the addon does not preventDefault, the caret
+    //     advances one child-index position. Expectation: right/left walk
+    //     stop at each equation and enter it (instead of skipping over the
+    //     atomic block), and exiting an equation lands on a visible caret
+    //     position that the next arrow key visibly moves from.
+    document.body.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(30);
+    editable.innerHTML = "";
+    const j2 = document.createTextNode("j");
+    const br1 = document.createElement("br");
+    const blkT = document.createElement("anki-typst");
+    blkT.setAttribute("data-typst", "sum");
+    blkT.setAttribute("data-render-src", "sum");
+    blkT.setAttribute("block", "true");
+    blkT.innerHTML = "<img data-src='sum'>";
+    const br2 = document.createElement("br");
+    const inlT = document.createElement("anki-typst");
+    inlT.setAttribute("data-typst", "x");
+    inlT.setAttribute("data-render-src", "x");
+    inlT.setAttribute("block", "false");
+    inlT.innerHTML = "<img data-src='x'>";
+    const k2 = document.createTextNode("k");
+    for (const n of [j2, br1, blkT, br2, inlT, k2]) editable.appendChild(n);
+    await sleep(10);
+    // child indices: j2=0 br1=1 blkT=2 br2=3 inlT=4 k2=5; caret positions 0..6
+    const selStub2 = {
+        isCollapsed: true, rangeCount: 1,
+        focusNode: editable, focusOffset: 0,
+        removeAllRanges() { this.rangeCount = 0; },
+        addRange(r) { this.rangeCount = 1; this.focusNode = r.startContainer; this.focusOffset = r.startOffset; },
+    };
+    host.shadowRoot.getSelection = () => selStub2;
+    const setPos = (p) => { selStub2.focusNode = editable; selStub2.focusOffset = p; };
+    const readPos = () => {
+        const n = selStub2.focusNode, o = selStub2.focusOffset;
+        if (n === editable) return o;
+        if (n.nodeType === 3 && n.parentNode === editable) {
+            const i = Array.prototype.indexOf.call(editable.childNodes, n);
+            return o === 0 ? i : i + 1;
+        }
+        return -1;
+    };
+    let cur = 0;
+    setPos(0);
+    const panelOpen = () => !!document.querySelector(".typst-anki-panel");
+    const press = async (key) => {
+        const ev = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        document.dispatchEvent(ev);
+        await sleep(15);
+        if (!ev.defaultPrevented) {
+            // simulated browser default: one caret step
+            cur = Math.min(Math.max(cur + (key === "ArrowRight" ? 1 : -1), 0), editable.childNodes.length);
+            setPos(cur);
+        }
+        return ev.defaultPrevented;
+    };
+    const exitEditor = async (key) => {
+        const box = document.querySelector(".typst-anki-panel .src");
+        const at = key === "ArrowLeft" ? 0 : box.value.length;
+        box.setSelectionRange(at, at);
+        box.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+        await sleep(20);
+        cur = readPos();
+    };
+
+    check("traversal starts before j", cur === 0 && !panelOpen());
+    check("right moves after j (plain text)", !(await press("ArrowRight")) && cur === 1);
+    check("right behind j<br> enters the block", (await press("ArrowRight")) && panelOpen() && cur === 1);
+    await exitEditor("ArrowRight");
+    check("exit block right lands before the inline equation", cur === 4 && !panelOpen());
+    check("right before inline enters it", (await press("ArrowRight")) && panelOpen());
+    await exitEditor("ArrowRight");
+    check("exit inline right lands before k", cur === 5 && !panelOpen());
+    check("right moves after k", !(await press("ArrowRight")) && cur === 6);
+    check("left moves before k", !(await press("ArrowLeft")) && cur === 5);
+    check("left after inline re-enters it", (await press("ArrowLeft")) && panelOpen());
+    await exitEditor("ArrowLeft");
+    check("exit inline left lands before the inline equation", cur === 4 && !panelOpen());
+    check("left across <br> into the block enters it", (await press("ArrowLeft")) && panelOpen());
+    await exitEditor("ArrowLeft");
+    check("exit block left places caret inside j (after j)", cur === 1 && selStub2.focusNode === j2);
+    check("left from after j moves to before j in one press", !(await press("ArrowLeft")) && cur === 0);
+    delete host.shadowRoot.getSelection;
 
     console.log(failures === 0 ? "ALL ELEMENT TESTS PASSED" : failures + " FAILURES");
     process.exit(failures === 0 ? 0 : 1);
