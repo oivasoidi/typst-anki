@@ -8,12 +8,6 @@ Add custom functions inside [`preamble.typ`](src/typst-anki/user_files/preamble.
 
 Compatible with Anki 24.11 through 26.09+, including the new editor introduced in Anki 26.08.
 
-<p align="center">
-    <img src="images/image-2.png", width=30%>
-    <img src="images/image-4.png", width=30%>
-    <img src="images/image-3.png", width=30%>
-</p>
-
 ## Installation
 
 ```sh
@@ -26,7 +20,6 @@ zip -r typst-anki.zip ./*
 ```
 
 Then, open Anki > Tools > Addons > Install from file > `typst_anki.zip`.
-Or, if you wish, use [`just`](https://github.com/casey/just).
 
 ## Features
 
