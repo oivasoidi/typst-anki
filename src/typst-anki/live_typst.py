@@ -47,6 +47,7 @@ BRIDGE_PREFIX = "typst-anki:compile:"
 # _on_bridge_message, where the bridge context is the Editor instance.
 SHORTCUT_INLINE = "typst-anki:shortcut:inline"
 SHORTCUT_BLOCK = "typst-anki:shortcut:block"
+SHORTCUT_REPLACE = "typst-anki:shortcut:replace"
 # The equations menu entry "Edit preamble...": opens the preamble dialog.
 SHORTCUT_PREAMBLE = "typst-anki:shortcut:preamble"
 # `AnkiWebViewKind.EDITOR.value`; used to identify the new editor's webview,
@@ -63,6 +64,7 @@ _Export = None
 _element_js = ""
 _new_editor_js = ""
 _insert_equation = None
+_replace_in_field = None
 _edit_preamble = None
 _editor_classes_cache: list | None = None
 
@@ -73,12 +75,13 @@ def setup(
     gen_typst_math,
     Export,
     insert_equation,
+    replace_in_field=None,
     edit_preamble=None,
 ) -> None:
     """Initialize the integration. Called once from the addon's `__init__`."""
 
     global _addon_package, _config, _gen_typst_math, _Export, _element_js
-    global _new_editor_js, _insert_equation, _edit_preamble
+    global _new_editor_js, _insert_equation, _replace_in_field, _edit_preamble
 
     _addon_package = addon_package
     _config = config
@@ -87,6 +90,7 @@ def setup(
     _element_js = _ELEMENT_JS_PATH.read_text(encoding="utf-8")
     _new_editor_js = _NEW_EDITOR_JS_PATH.read_text(encoding="utf-8")
     _insert_equation = insert_equation
+    _replace_in_field = replace_in_field
     _edit_preamble = edit_preamble
 
     gui_hooks.webview_will_set_content.append(_inject_into_stdhtml_page)
@@ -268,10 +272,14 @@ def _append_typst_menu_actions(menu, editor) -> None:
     if tr.editing_mathjax_inline() not in [action.text() for action in menu.actions()]:
         return
 
-    entries = (
+    entries = [
         ("Typst Math", "Ctrl+M, T", functools.partial(_insert_equation, editor, False)),
         ("Typst Math block", "Ctrl+M, B", functools.partial(_insert_equation, editor, True)),
-    )
+    ]
+    if _replace_in_field is not None:
+        entries.append(
+            ("Typst Math replace", "Ctrl+M, R", functools.partial(_replace_in_field, editor))
+        )
 
     menu.addSeparator()
     for text, keys, handler in entries:
@@ -348,6 +356,11 @@ def _on_bridge_message(handled, message, context):
         if context is None:
             return (True, None)
         _insert_equation(context, message == SHORTCUT_BLOCK)
+        return (True, None)
+
+    if message == SHORTCUT_REPLACE:
+        if context is not None and _replace_in_field is not None:
+            _replace_in_field(context)
         return (True, None)
 
     if not message.startswith(BRIDGE_PREFIX):

@@ -370,6 +370,32 @@ check("element defined", !!window.customElements.get("anki-typst"));
     await sleep(20);
     check("no br inserted when a line follows",
         blk2.nextSibling === null || blk2.nextSibling.nodeType === 3 /* text */);
+    // Two block equations directly adjacent: leaving the second one with
+    // ArrowLeft must NOT insert a <br> between them — the first block's own
+    // line hosts the caret.
+    const blkA = document.createElement("anki-typst");
+    blkA.setAttribute("data-typst", "a^2");
+    blkA.setAttribute("data-render-src", "a^2");
+    blkA.setAttribute("block", "true");
+    blkA.innerHTML = "<img data-src='a2'>";
+    const blkB = document.createElement("anki-typst");
+    blkB.setAttribute("data-typst", "b^2-2");
+    blkB.setAttribute("data-render-src", "b^2-2");
+    blkB.setAttribute("block", "true");
+    blkB.innerHTML = "<img data-src='b22'>";
+    editable.appendChild(blkA);
+    editable.appendChild(blkB); // directly after blkA, no text node between
+    await sleep(10);
+    blkB.click();
+    await sleep(20);
+    const boxBB = document.querySelector(".typst-anki-panel .src");
+    boxBB.setSelectionRange(0, 0);
+    boxBB.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await sleep(20);
+    check("no br between adjacent block equations",
+        blkB.previousSibling === blkA && blkA.nextSibling === blkB);
+    check("ArrowLeft at start exits and commits",
+        !document.querySelector(".typst-anki-panel") && blkB.dataset.typst === "b^2-2");
     // The empty placeholder of a block equation is centered as well.
     const blkEmpty = document.createElement("anki-typst");
     blkEmpty.setAttribute("data-typst", "");

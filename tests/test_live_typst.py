@@ -221,8 +221,12 @@ svg = ta.gen_typst_math("x^2 + 1/(1+x)", ta.Export.SVG, False)
 t1 = time.perf_counter()
 mathml = ta.gen_typst_math("x^2 + 1/(1+x)", ta.Export.MATHML, False)
 t2 = time.perf_counter()
-assert svg.startswith('<img style="vertical-align: middle;"'), svg[:80]
+assert svg.startswith('<img data-editor-shrink="false" style="vertical-align: middle;"'), svg[:110]
 assert 'src="data:image/svg+xml;base64,' in svg, svg[:120]
+# Anki's editor shrinks non-mathjax imgs when "shrink images" is on
+# (width/height unset + max-height cap); equations must opt out so the baked
+# render keeps the same size as the live preview inside the element shadow.
+assert 'data-editor-shrink="false"' in svg, svg[:120]
 assert "<math" in mathml, mathml[:200]
 assert "<meta" not in mathml and "<style" not in mathml, mathml[:200]
 assert mathml.startswith("<math"), mathml[:60]

@@ -915,28 +915,40 @@
     // invisible. Like the native editor (FrameElement.insertLineBreak),
     // move it onto the neighbouring line instead — the end of the previous
     // line / start of the next line if one exists there, otherwise a fresh
-    // <br> inserted next to the equation.
+    // <br> inserted next to the equation. A neighbour that is itself
+    // block-level (e.g. another block equation) already provides a line,
+    // though: place the caret at the boundary directly, without inserting a
+    // <br> that would add a spurious blank line between the two blocks.
     __placeCaretBesideBlock(side) {
-      const br = document.createElement("br");
-      let focus = null;
-      if (side === "before") {
-        const previous = this.previousSibling;
-        focus = canHostCaret(previous)
-          ? previous
-          : this.insertAdjacentElement("beforebegin", br);
-        if (focus) {
-          placeCaretAfter(focus);
+      const neighbor = side === "before" ? this.previousSibling : this.nextSibling;
+      if (neighbor && canHostCaret(neighbor)) {
+        if (side === "before") {
+          placeCaretAfter(neighbor);
         } else {
-          placeCaretBefore(this);
+          placeCaretBefore(neighbor);
         }
-      } else {
-        const next = this.nextSibling;
-        focus = canHostCaret(next) ? next : this.insertAdjacentElement("afterend", br);
-        if (focus) {
-          placeCaretBefore(focus);
+        return;
+      }
+      if (neighbor) {
+        // Block-level neighbour: the caret at the boundary renders on its
+        // line, so no <br> is needed.
+        if (side === "before") {
+          placeCaretBefore(this);
         } else {
           placeCaretAfter(this);
         }
+        return;
+      }
+      // Field start/end: a <br> gives the caret a line of its own.
+      const br = document.createElement("br");
+      const inserted =
+        side === "before"
+          ? this.insertAdjacentElement("beforebegin", br)
+          : this.insertAdjacentElement("afterend", br);
+      if (side === "before") {
+        placeCaretAfter(inserted);
+      } else {
+        placeCaretBefore(inserted);
       }
     }
 

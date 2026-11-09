@@ -4,7 +4,7 @@
 
 Type `Typst` math directly in the Anki editor and get **live, re-editable equations** — no dialogs, no finalized renders. Press <kbd>Ctrl + M, T</kbd> (<kbd>Ctrl+M, B</kbd> for a block equation) or pick `Typst Math` from the editor's `Equations` menu: an equation is inserted at the caret and a small floating source editor opens *inside* the editor webview. While you type, the equation is rendered live as SVG/MathML inline in the field (as a centered block in block mode). <kbd>Enter</kbd> commits, <kbd>Esc</kbd> reverts; click the equation any time — even after saving the card and reopening Anki — to re-open its source.
 
-Add custom functions inside [`preamble.typ`](src/typst-anki/user_files/preamble.typ)—make sure to change your text color according to your system theme!
+Add custom functions inside [`preamble.typ`](src/typst-anki/user_files/preamble.typ). Note that with the default `"adaptive-color": true` setting, baked equations follow the viewer's color scheme instead of the preamble's text color — set `"adaptive-color": false` in the addon config to keep the compiled color.
 
 Compatible with Anki 24.11 through 26.09+, including the new editor introduced in Anki 26.08.
 
@@ -32,8 +32,19 @@ Or, if you wish, use [`just`](https://github.com/casey/just).
 
 - [x] **Live equations, no dialogs**: `Ctrl+M, T` / `Ctrl+M, B` insert a `<anki-typst>` element at the caret (wrapping the current selection, if any). The equation renders inline in the field while its Typst source is edited in a small floating panel inside the editor webview. Click an equation — or move the caret into it with the arrow keys — to re-edit it; <kbd>Enter</kbd> commits, <kbd>Esc</kbd> reverts, committing an empty equation deletes it.
 - [x] **Native menu integration**: the Typst entries also appear in the editor's "Equations" menu (Mathjax Inline, Mathjax Block, ..., Latex Math Env) and can be clicked there instead of using the shortcuts. In the new editor (26.08+), where all editor shortcuts are handled inside the webview, the Typst shortcuts are registered the same way — so the native MathJax/Latex chords keep working.
-- [x] Use Typst HTML export to utilize MathML (since Typst v0.15.0), or Typst SVG export to ensure the same visual look everywhere.
+- [x] `Ctrl+M, R` converts raw dollar-delimited math in the current field into the same re-editable equations — non-destructively, keeping the Typst source: `$...$` becomes an inline equation, while `$$...$$` and `$ ... $` (space-padded) become block equations. Dollar signs inside HTML attributes and `\$` escapes are left alone.
+- [x] Use Typst HTML export to utilize MathML (since Typst v0.15.0 — selectable text, colored by the client via `currentColor`), or Typst SVG export for crisp, identical geometry everywhere. Baked SVGs are theme-aware too: a `prefers-color-scheme` style is injected into the SVG itself, so equations render dark text on light themes and light text on dark ones on any client — AnkiDroid, AnkiWeb and desktop alike, even without the addon (disable via `"adaptive-color": false`; note this also overrides explicit colors like `red` in the source).
 - [x] **Instant live preview via an embedded incremental compiler**: the addon bundles the Typst WASM compiler (typst.ts, same Typst 0.15 as the Python binding) and runs it in a hidden webview that shares the editors' browser profile. Because editor pages' Content-Security-Policy forbids WebAssembly, they send their compiles to that page over a `BroadcastChannel`, which answers in milliseconds — no Python in the compile loop. If the page is unavailable, compiles transparently fall back to the Python bridge (compiled off the main thread); MathML renders always use the bridge, since the WASM compiler does not expose Typst's HTML export. This adds roughly 40 MB to the addon (compiler + fonts, bundled under `web/vendor/`).
+
+## Configuration
+
+Open it via **Tools → Add-ons → typst-anki → Config** (the same options are described in [`config.md`](src/typst-anki/config.md)). Editable keys in `config.json`:
+
+| Key | Values | Default | Effect |
+| --- | --- | --- | --- |
+| `"render-type"` | `"svg"` or `"mathml"` | `"svg"` | Format used for newly inserted/recompiled equations: SVG (crisp, identical geometry everywhere) or MathML (selectable text, colored by the client via `currentColor`). Existing equations keep their stored format. |
+| `"adaptive-color"` | `true` or `false` | `true` | Only relevant for SVG. When `true`, a `prefers-color-scheme` style is baked into each SVG, so equations render dark text on light themes and light text on dark ones — on AnkiDroid, AnkiWeb and desktop alike, even without the addon. This overrides the preamble's text color *and* explicit colors in the source (e.g. `red`). When `false`, equations keep the color they were compiled with. |
+| `"preamble"` | path relative to the addon folder | `"user_files/preamble.typ"` | Custom Typst preamble for your own functions, page dimensions, text size/color. Edit it directly or via the addon's *Edit preamble* action. |
 
 ### Live equations & portability
 
@@ -43,6 +54,6 @@ The `<anki-typst>` element stores the Typst source (`data-typst`, the source of 
 <anki-typst data-typst="x^2 + 1" data-render="svg"><img src="data:image/svg+xml;base64,..."></anki-typst>
 ```
 
-Because the render is baked in, cards display identically on **AnkiDroid, AnkiWeb and desktop Anki without the addon** — they simply show the baked SVG/MathML. Installing the addon turns the element back into a click-to-edit equation. A `data-render-src` hash lets the element silently recompile stale renders (e.g. after editing the source via the HTML editor).
+Because the render is baked in, cards display identically on **AnkiDroid, AnkiWeb and desktop Anki without the addon** — they simply show the baked SVG/MathML (with SVG/MathML text color adapting to the viewer's light/dark theme). Installing the addon turns the element back into a click-to-edit equation. A `data-render-src` hash lets the element silently recompile stale renders (e.g. after editing the source via the HTML editor).
 
 Caveats of the prototype: compile requests run on the main thread (~100 ms per equation); cloze deletions inside an equation are not hidden on clients without the addon; deleting an equation is a single <kbd>Backspace</kbd>.

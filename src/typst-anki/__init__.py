@@ -5,6 +5,8 @@ import sys
 import tempfile
 from enum import Enum
 from functools import partial
+from html import escape as html_escape
+from html import unescape as html_unescape
 from pathlib import Path
 
 from aqt import mw
@@ -131,10 +133,16 @@ def svg_to_base64_img(svg: bytes, display_math=False) -> str:
         svg_text = svg_text[: head_end + 1] + SVG_THEME_STYLE + svg_text[head_end + 1 :]
 
     svg_b64 = "data:image/svg+xml;base64," + base64.b64encode(svg_text.encode()).decode()
+    # data-editor-shrink="false" opts the equation out of Anki's editor
+    # image-shrinking (`:host-context(.shrink-image) img:not(.mathjax):not([data-editor-shrink=false])`
+    # sets width/height to unset and caps max-height). Without it the baked
+    # render is shrunk in display mode while the live preview inside the
+    # element's shadow root is not — the equation would change size between
+    # editing and committed states.
     return (
-        f'<img style="vertical-align: middle;"{dims} src="{svg_b64}">'
+        f'<img data-editor-shrink="false" style="vertical-align: middle;"{dims} src="{svg_b64}">'
         if not display_math
-        else f'<img style="display: block; margin-left: auto; margin-right: auto;"{dims} src="{svg_b64}">'
+        else f'<img data-editor-shrink="false" style="display: block; margin-left: auto; margin-right: auto;"{dims} src="{svg_b64}">'
     )
 
 
@@ -276,6 +284,147 @@ def typst_editor(editor: Editor, display_math=False):
     editor.web.eval(insert_live_element_js(display_math))
 
 
+# ----- Replace functionality: raw $...$ in the current field -> <anki-typst> ----- #
+
+
+def current_editor_note(editor: Editor):
+    """Returns the note currently edited by `editor`, or None.
+
+    The legacy editor (up to Anki 26.07) exposes the note directly via `.note`,
+    while the new editor (Anki 26.08+) only stores the note id in `.nid`.
+    """
+
+    note = getattr(editor, "note", None)
+    if note is not None:
+        return note
+
+    nid = getattr(editor, "nid", None)
+    return mw.col.get_note(nid) if nid else None
+
+
+def current_field_index(editor: Editor) -> int | None:
+    """Returns the index of the field currently focused in `editor`.
+
+    `currentField` is reset to None when the field loses focus, in which case
+    the last focused field (`.last_field_index`) is used as a fallback.
+    """
+
+    index = editor.currentField
+    if index is None:
+        index = getattr(editor, "last_field_index", None)
+    return index
+
+
+# `$$...$$` (block) first, then `$...$` (inline). A backslash-escaped dollar
+# (`\$`, a literal dollar sign) never opens or closes a math span.
+_DOLLAR_RE = re.compile(
+    r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$([^$]+?)(?<!\\)\$", re.DOTALL
+)
+# HTML tags are kept out of the substitution: `$` inside an attribute (e.g. a
+# `data-typst` value or a URL) must never be treated as a math delimiter.
+_TAG_RE = re.compile(r"(<[^>]*>)")
+
+
+def _dollar_repl(match, render: str) -> str:
+    if match.group(1) is not None:  # $$...$$
+        raw, block = match.group(1), True
+    else:  # $...$ — padded with spaces on both sides means display math
+        raw = match.group(2)
+        block = raw.startswith(" ") and raw.endswith(" ")
+    # The field HTML encodes special characters as entities; decode them so
+    # the Typst source is the real text (it is re-escaped into the attribute
+    # below).
+    src = html_unescape(raw).strip()
+    if not src:
+        return match.group(0)
+
+    export = Export.MATHML if render == "mathml" else Export.SVG
+    try:
+        baked = gen_typst_math(src, export, block)
+    except Exception:
+        # Uncompilable source: leave the raw $...$ untouched.
+        return match.group(0)
+
+    esc = html_escape(src, quote=True)
+    return (
+        f'<anki-typst data-typst="{esc}" data-render-src="{esc}" '
+        f'data-render="{render}" block="{"true" if block else "false"}">'
+        f"{baked}</anki-typst>"
+    )
+
+
+def dollars_to_live_elements(field_html: str) -> str:
+    """Converts raw `$...$` / `$$...$$` / `$ ... $` spans in a field's HTML into
+    live `<anki-typst>` elements with a baked render, keeping the Typst source.
+
+    `$...$` becomes an inline equation; `$$...$$` and `$ ... $` (space-padded)
+    become block equations. Only text between tags is scanned, so dollar
+    signs inside attributes are left alone.
+    """
+
+    render = str(config.get("render-type", "svg")).lower()
+    parts = _TAG_RE.split(field_html)
+    for i in range(0, len(parts), 2):  # even indices are text, not tags
+        parts[i] = _DOLLAR_RE.sub(lambda m: _dollar_repl(m, render), parts[i])
+    return "".join(parts)
+
+
+def replace_in_current_field(editor: Editor):
+    """Converts all raw dollar-delimited math in the current field into
+    re-editable `<anki-typst>` equations, in place."""
+
+    note = current_editor_note(editor)
+    if note is None:
+        showInfo("Select a text field or save the note first!")
+        return
+
+    field_index = current_field_index(editor)
+    if field_index is None:
+        showInfo("Select a text field!")
+        return
+    field_names = [f["name"] for f in note.col.models.get(note.mid)["flds"]]
+    if field_index >= len(field_names):
+        showInfo("Select a text field!")
+        return
+    current_field = field_names[field_index]
+
+    new_note_text = dollars_to_live_elements(note[current_field])
+    if new_note_text == note[current_field]:
+        return
+    note[current_field] = new_note_text
+
+    if getattr(editor, "note", None) is not None:
+        # Legacy editor: it owns the note object and persists it itself.
+        editor.setNote(editor.note)
+    else:
+        # New editor: the note was fetched from the collection and thus needs
+        # to be written back to it, then the editor reloaded from the database.
+        mw.col.update_note(note)
+        if hasattr(editor, "reload_note"):
+            editor.reload_note()
+        else:
+            editor.setNote(note)
+
+
+def collect_and_replace(editor: Editor):
+    """Entry point for the "Typst Math replace" action."""
+
+    if editor.currentField is None and getattr(editor, "last_field_index", None) is None:
+        showInfo("Select a text field or note!")
+        return
+
+    if getattr(editor, "note", None) is None and hasattr(
+        editor, "call_after_note_saved"
+    ):
+        # New editor: flush pending changes from the webview into the note
+        # before modifying it behind the editor's back.
+        editor.call_after_note_saved(
+            partial(replace_in_current_field, editor), keepFocus=True
+        )
+    else:
+        replace_in_current_field(editor)
+
+
 def settings_cb():
     """Callback for opening the "Edit preamble" dialog."""
 
@@ -326,6 +475,7 @@ def shortcut_hook(keys: list[tuple], editor: Editor):
         [
             ("Ctrl+M, T", partial(typst_editor, editor)),
             ("Ctrl+M, B", partial(typst_editor, editor, True)),
+            ("Ctrl+M, R", partial(collect_and_replace, editor)),
         ]
     )
 
@@ -363,6 +513,7 @@ setup_live_typst(
     gen_typst_math,
     Export,
     insert_equation=typst_editor,
+    replace_in_field=collect_and_replace,
     edit_preamble=settings_cb,
 )
 

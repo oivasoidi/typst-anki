@@ -187,9 +187,13 @@
           svgText = svgText.slice(0, head + 1) + style + svgText.slice(head + 1);
         }
         const src = `data:image/svg+xml;base64,${base64(svgText)}`;
+        // data-editor-shrink="false" opts the equation out of Anki's editor
+        // image-shrinking, so the baked render keeps its size in display mode
+        // exactly like the live preview (which lives in the element's shadow
+        // root and is not affected by that rule).
         return block
-          ? `<img style="display: block; margin-left: auto; margin-right: auto;"${dims} src="${src}">`
-          : `<img style="vertical-align: middle;"${dims} src="${src}">`;
+          ? `<img data-editor-shrink="false" style="display: block; margin-left: auto; margin-right: auto;"${dims} src="${src}">`
+          : `<img data-editor-shrink="false" style="vertical-align: middle;"${dims} src="${src}">`;
       }
 
       async function onMessage(msg) {

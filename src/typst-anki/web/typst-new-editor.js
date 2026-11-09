@@ -38,6 +38,7 @@
   const ACTIONS = [
     ["Control+M, T", "typst-anki:shortcut:inline", "Typst Math"],
     ["Control+M, B", "typst-anki:shortcut:block", "Typst Math block"],
+    ["Control+M, R", "typst-anki:shortcut:replace", "Typst Math replace"],
   ];
   const PREAMBLE_MESSAGE = "typst-anki:shortcut:preamble";
 
