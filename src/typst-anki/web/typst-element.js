@@ -386,15 +386,41 @@
     return true;
   }
 
+  // Remove an equation from the field (Backspace right before it, Delete
+  // right after it), notifying the editor and leaving the caret where the
+  // equation was. Works the same for empty equations and ones with content.
+  function deleteEquation(el) {
+    const next = el.nextSibling;
+    const prev = el.previousSibling;
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+    el.remove();
+    if (next) {
+      placeCaretBefore(next);
+    } else if (prev) {
+      placeCaretAfter(prev);
+    }
+  }
+
   // Moving the caret into an equation with the arrow keys opens its source
-  // editor, like native MathJax equations do.
+  // editor, like native MathJax equations do; Backspace/Delete next to one
+  // removes it.
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      const isArrow = event.key === "ArrowLeft" || event.key === "ArrowRight";
+      const isDelete = event.key === "Backspace" || event.key === "Delete";
+      if (!isArrow && !isDelete) {
         return;
       }
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      if (isArrow && event.shiftKey) {
+        return;
+      }
+      // While a source editor is open, Backspace/Delete edit the source
+      // text — the document handler must not delete equations then.
+      if (isDelete && Array.from(elements).some((el) => el.__editing)) {
         return;
       }
       for (const el of elements) {
@@ -417,6 +443,18 @@
           event.preventDefault();
           event.stopPropagation();
           el.enterEdit("end");
+          return;
+        }
+        if (event.key === "Backspace" && caretAdjacent(el, "before")) {
+          event.preventDefault();
+          event.stopPropagation();
+          deleteEquation(el);
+          return;
+        }
+        if (event.key === "Delete" && caretAdjacent(el, "after")) {
+          event.preventDefault();
+          event.stopPropagation();
+          deleteEquation(el);
           return;
         }
       }
@@ -928,12 +966,9 @@
         this.__finish(false, false);
       } else if (e.key === "Backspace" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // Backspace in an empty equation deletes it, like the native
-        // equation editor. `__dirty` is forced so a freshly inserted,
-        // never-typed equation is removed as well — the empty-commit path
-        // in __finish only deletes deliberately emptied equations.
+        // equation editor (the empty-commit path in __finish removes it).
         if (!this.__sourceText().trim()) {
           e.preventDefault();
-          this.__dirty = true;
           this.__finish(true, false);
         }
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -1196,6 +1231,38 @@
       }
     }
 
+    // Delete the equation: notify the editor while the element is still
+    // connected (an input event on a detached node does not bubble), remove
+    // it, and hand focus back to the field with the caret where the
+    // equation was — deleting must never leave the editor unfocused.
+    __deleteSelf() {
+      const editable = this.closest("[contenteditable='true']");
+      const next = this.nextSibling;
+      const prev = this.previousSibling;
+      this.__editing = false;
+      this.__releaseMirror();
+      this.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+      this.remove();
+      if (!editable) {
+        return;
+      }
+      try {
+        editable.focus();
+      } catch (err) {
+        // best effort; the caret placement below still applies
+      }
+      if (next) {
+        placeCaretBefore(next);
+      } else if (prev) {
+        placeCaretAfter(prev);
+      } else {
+        placeCaret(editable, (range) => {
+          range.selectNodeContents(editable);
+          range.collapse(true);
+        });
+      }
+    }
+
     __finish(commit, moveCaret) {
       if (!this.__editing) {
         return;
@@ -1214,39 +1281,28 @@
         const source = this.__sourceText();
 
         if (!source.trim()) {
-          // An empty equation is only removed when the user deliberately
-          // emptied it. Right after insertion (nothing typed yet), a blur
-          // may fire spuriously while the editor settles its focus — keep
-          // the element in that case, showing its placeholder.
-          if (this.__dirty) {
-            this.__editing = false;
-            this.__releaseMirror();
-            // Notify before removing: an input event dispatched on a
-            // detached node does not bubble, so the editor would never
-            // learn that the field content changed.
-            this.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
-            this.remove();
-            return;
-          }
+          // Empty equations never persist: leaving the editor with an
+          // empty source deletes the equation.
+          this.__deleteSelf();
+          return;
+        }
+        this.dataset.typst = source;
+        if (this.__lastGood && this.__lastGood.source === source) {
+          this.__applyRender(this.__lastGood.html, true);
         } else {
-          this.dataset.typst = source;
-          if (this.__lastGood && this.__lastGood.source === source) {
-            this.__applyRender(this.__lastGood.html, true);
-          } else {
-            // No up-to-date render yet (e.g. blur immediately after typing):
-            // keep showing the old render, then swap in the fresh one — or,
-            // if the committed source does not compile, show it in red.
-            compileTypst(source, this.isBlock, this.dataset.render, (res) => {
-              if (!this.__editing && this.dataset.typst === source) {
-                if (res.ok) {
-                  this.__applyRender(res.html, true);
-                } else {
-                  this.__errorSource = source;
-                  this.__showDisplay();
-                }
+          // No up-to-date render yet (e.g. blur immediately after typing):
+          // keep showing the old render, then swap in the fresh one — or,
+          // if the committed source does not compile, show it in red.
+          compileTypst(source, this.isBlock, this.dataset.render, (res) => {
+            if (!this.__editing && this.dataset.typst === source) {
+              if (res.ok) {
+                this.__applyRender(res.html, true);
+              } else {
+                this.__errorSource = source;
+                this.__showDisplay();
               }
-            });
-          }
+            }
+          });
         }
       }
       this.__showDisplay();

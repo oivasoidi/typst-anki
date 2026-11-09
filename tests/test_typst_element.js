@@ -484,6 +484,76 @@ check("element defined", !!window.customElements.get("anki-typst"));
     boxD3.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
     await sleep(20);
     check("backspace in non-empty equation does not delete it", del3.isConnected);
+    // Close the still-open editor of del3.
+    document.body.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(20);
+
+    // 10e. Empty equations never persist: leaving the source editor with an
+    //      empty source deletes the equation — and keeps the field focused.
+    const keep = document.createElement("anki-typst");
+    keep.setAttribute("data-typst", "keepme2");
+    keep.setAttribute("data-render-src", "keepme2");
+    keep.innerHTML = "<img data-src='keepme2'>";
+    editable.appendChild(keep);
+    await sleep(10);
+    keep.click();
+    await sleep(20);
+    const boxK = document.querySelector(".typst-anki-panel .src");
+    boxK.value = "";
+    boxK.dispatchEvent(new window.Event("input"));
+    document.body.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); // leave
+    await sleep(20);
+    check("leaving an empty equation deletes it", !keep.isConnected);
+    check("field keeps focus after deletion", host.shadowRoot.activeElement === editable);
+
+    // 10f. Backspace/Delete in the field deletes an adjacent equation — an
+    //      empty one just like one with content — and keeps the caret in
+    //      the field.
+    const t1 = document.createTextNode("a");
+    const eq1 = document.createElement("anki-typst");
+    eq1.setAttribute("data-typst", "x");
+    eq1.setAttribute("data-render-src", "x");
+    eq1.innerHTML = "<img data-src='x'>";
+    const eqEmpty = document.createElement("anki-typst");
+    eqEmpty.setAttribute("data-typst", "");
+    editable.appendChild(t1);
+    editable.appendChild(eq1);
+    editable.appendChild(eqEmpty);
+    await sleep(10);
+    const childIndex = (n) => Array.prototype.indexOf.call(editable.childNodes, n);
+    const selStub3 = {
+        isCollapsed: true, rangeCount: 1,
+        focusNode: editable, focusOffset: childIndex(eq1), // before eq1
+        removeAllRanges() { this.rangeCount = 0; },
+        addRange(r) { this.rangeCount = 1; this.focusNode = r.startContainer; this.focusOffset = r.startOffset; },
+    };
+    host.shadowRoot.getSelection = () => selStub3;
+    let inputs2 = 0;
+    editable.addEventListener("input", () => inputs2++);
+    const bs1 = new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+    document.dispatchEvent(bs1);
+    await sleep(15);
+    check("backspace before equation deletes it",
+        !eq1.isConnected && bs1.defaultPrevented && inputs2 === 1);
+    // caret was placed before eqEmpty (now child index 1)
+    const bs2 = new window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+    document.dispatchEvent(bs2);
+    await sleep(15);
+    check("backspace before empty equation deletes it too", !eqEmpty.isConnected && inputs2 === 2);
+    // Delete key after an equation removes it as well.
+    const eq2 = document.createElement("anki-typst");
+    eq2.setAttribute("data-typst", "y");
+    eq2.setAttribute("data-render-src", "y");
+    eq2.innerHTML = "<img data-src='y'>";
+    editable.appendChild(eq2);
+    await sleep(10);
+    selStub3.focusNode = editable;
+    selStub3.focusOffset = childIndex(eq2) + 1; // after eq2
+    const delKey = new window.KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+    document.dispatchEvent(delKey);
+    await sleep(15);
+    check("delete after equation deletes it", !eq2.isConnected && delKey.defaultPrevented && inputs2 === 3);
+    delete host.shadowRoot.getSelection;
     // The empty placeholder of a block equation is centered as well.
     const blkEmpty = document.createElement("anki-typst");
     blkEmpty.setAttribute("data-typst", "");
