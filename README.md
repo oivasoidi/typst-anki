@@ -21,6 +21,13 @@ zip -r typst-anki.zip ./*
 
 Then, open Anki > Tools > Addons > Install from file > `typst_anki.zip`.
 
+Alternatively, use [`just`](https://github.com/casey/just) from the repo root — it runs the same steps via the recipes in [`justfile`](justfile):
+
+```sh
+just install   # install the typst dependency into src/typst-anki/lib and zip the addon
+just package   # re-zip only, after you changed addon files
+```
+
 ## Features
 
 - [x] **Live equations, no dialogs**: `Ctrl+M, T` / `Ctrl+M, B` insert a `<anki-typst>` element at the caret (wrapping the current selection, if any). The equation renders inline in the field while its Typst source is edited in a small floating panel inside the editor webview. Click an equation — or move the caret into it with the arrow keys — to re-edit it; <kbd>Enter</kbd> commits, <kbd>Esc</kbd> reverts, committing an empty equation deletes it.
